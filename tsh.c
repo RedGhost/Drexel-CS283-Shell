@@ -181,12 +181,24 @@ void eval(char *cmdline)
             unix_error("Could not fork new process");
         }
         else if(processID == 0) {
+            setpgid(0, 0);
             int status = execve(arguments[0], arguments, 0);
+            if(errno == ENOENT) {
+                printf("%s: Command not found.\n", arguments[0]);
+            }
+            else if(errno == EACCES) {
+                printf("%s: Command not executable.\n", arguments[0]);
+            }
+            else if(errno != 0) {
+                printf("%s: Unknown error.\n", arguments[0]);
+            }
             exit(status);
         }
         else {
             if(bg) {
                 addjob(jobs, processID, BG, cmdline);
+                struct job_t * job = getjobpid(jobs, processID);
+                printf("[%d] (%d) %s", job->jid, processID, job->cmdline);
             }
             else {
                 addjob(jobs, processID, FG, cmdline);
@@ -263,7 +275,7 @@ int builtin_cmd(char **argv)
 {
     if(argv != NULL && argv[0] != NULL) {
         if(strcmp(argv[0], "quit") == 0) {
-            exit(0);
+            exit(EXIT_SUCCESS);
             return 1;
         }
         else if(strcmp(argv[0], "jobs") == 0) {
@@ -312,11 +324,27 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
-    int pid = wait(NULL);
+    int status;
+    int pid = waitpid(-1, &status, WNOHANG | WUNTRACED);
     if(pid < 0) {
         unix_error("Error reaping child");
     }
-    deletejob(jobs, pid);
+    
+    struct job_t * job = getjobpid(jobs, pid);
+    if(WIFSTOPPED(status)) {
+        job->state = ST;
+        printf("Job [%d] (%d) stopped by signal %d\n", job->jid, pid, SIGTSTP);
+    }
+    else {
+        job->state = UNDEF;
+        if(WIFSIGNALED(status)) {
+            deletejob(jobs, pid);
+            printf("Job [%d] (%d) terminated by signal %d\n", job->jid, pid, WTERMSIG(status));
+        }
+        else if(WIFEXITED(status)) {
+            deletejob(jobs, pid);
+        }
+    }
     
     return;
 }
@@ -328,6 +356,10 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {
+    pid_t pid = fgpid(jobs);
+    if(pid > 1) {
+        kill(-pid, SIGINT);
+    }
     return;
 }
 
@@ -338,6 +370,10 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
+    pid_t pid = fgpid(jobs);
+    if(pid > 1) {
+        kill(-pid, SIGTSTP);
+    }
     return;
 }
 
