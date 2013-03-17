@@ -165,6 +165,10 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &set, NULL);
     char ** arguments = (char **) malloc(MAXARGS * sizeof(char *));
     if(arguments == NULL) {
         unix_error("Not Enough Memory");
@@ -181,6 +185,7 @@ void eval(char *cmdline)
             unix_error("Could not fork new process");
         }
         else if(processID == 0) {
+            sigprocmask(SIG_UNBLOCK, &set, NULL);
             setpgid(0, 0);
             int status = execve(arguments[0], arguments, 0);
             if(errno == ENOENT) {
@@ -199,9 +204,11 @@ void eval(char *cmdline)
                 addjob(jobs, processID, BG, cmdline);
                 struct job_t * job = getjobpid(jobs, processID);
                 printf("[%d] (%d) %s", job->jid, processID, job->cmdline);
+                sigprocmask(SIG_UNBLOCK, &set, NULL);
             }
             else {
                 addjob(jobs, processID, FG, cmdline);
+                sigprocmask(SIG_UNBLOCK, &set, NULL);
                 waitfg(processID);
             }
         }
@@ -296,7 +303,51 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
-    printf("Not Implemented: fg/bg\n");
+
+printf("HASDFDSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\n");
+    printf("%s %s\n", argv[0], argv[1]);
+    if(argv == NULL || argv[0] == NULL) {
+        return;
+    }
+
+    if(argv[1] == NULL) {
+        printf("You must specify a job ID or process ID.\n");
+        return;
+    }
+
+    printf("%s %s\n", argv[0], argv[1]);
+
+    int id = 0;
+    int pid = 1;
+    if(*(argv[1]) == '%') {
+        pid = 0;
+        id = atoi(argv[1]+1);
+    }
+    else {
+        id = atoi(argv[1]);
+    }
+
+    struct job_t * job = ((pid) ? getjobpid(jobs, id) : getjobjid(jobs, id));
+    if(job == NULL) {
+        return;
+    }
+    printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+
+    if(job->state == UNDEF) {
+        return;
+    }
+
+
+    if(strcmp(argv[0], "fg") == 0) {
+        job->state = FG;
+        kill(-job->pid, SIGCONT);
+        waitfg(job->pid);
+    }
+    else if(strcmp(argv[0], "bg") == 0) {
+        job->state = BG;
+        kill(-job->pid, SIGCONT);
+    }
+
     return;
 }
 
@@ -305,7 +356,7 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
-    while(fgpid(jobs) != 0) {
+    while(fgpid(jobs) == pid) {
         sleep(100);
     } 
     return;
