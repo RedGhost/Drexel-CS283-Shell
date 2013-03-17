@@ -165,6 +165,16 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
+    char ** arguments = (char **) malloc(MAXARGS * sizeof(char *));
+    if(arguments == NULL) {
+        unix_error("Not Enough Memory");
+    }
+    int bg = parseline(cmdline, arguments);
+
+    if(!builtin_cmd(arguments)) {
+        printf("not built-in\n");
+    }
+
     return;
 }
 
@@ -231,6 +241,24 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv) 
 {
+    if(argv != NULL && argv[0] != NULL) {
+        if(strcmp(argv[0], "quit") == 0) {
+            exit(0);
+            return 1;
+        }
+        else if(strcmp(argv[0], "jobs") == 0) {
+            listjobs(jobs);
+            return 1;
+        }
+        else if(strcmp(argv[0], "fg") == 0) {
+            printf("Not Implemented: fg\n");
+            return 1;
+        }
+        else if(strcmp(argv[0], "bg") == 0) {
+            printf("Not Implemented: bg\n");
+            return 1;
+        }
+    }
     return 0;     /* not a builtin command */
 }
 
