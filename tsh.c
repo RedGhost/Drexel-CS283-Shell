@@ -171,8 +171,28 @@ void eval(char *cmdline)
     }
     int bg = parseline(cmdline, arguments);
 
+    if(arguments[0] == NULL) {
+        return;
+    }
+
     if(!builtin_cmd(arguments)) {
-        printf("not built-in\n");
+        if(bg) {
+            printf("Not Implemented: Background Jobs\n");
+        }
+        else {
+            pid_t processID = fork();
+            if(processID < 0) {
+                unix_error("Could not fork new process");
+            }
+            else if(processID == 0) {
+                int status = execve(arguments[0], arguments, 0);
+                exit(status);
+            }
+            else {
+                addjob(jobs, processID, FG, cmdline);
+                waitfg(processID);
+            }
+        }
     }
 
     return;
@@ -275,6 +295,10 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+    int status;
+    if(waitpid(pid, &status, 0) < 0) {
+        unix_error("Could not wait for child");
+    } 
     return;
 }
 
@@ -291,6 +315,7 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
+printf("SigChild has been called\n");
     return;
 }
 
