@@ -176,17 +176,17 @@ void eval(char *cmdline)
     }
 
     if(!builtin_cmd(arguments)) {
-        if(bg) {
-            printf("Not Implemented: Background Jobs\n");
+        pid_t processID = fork();
+        if(processID < 0) {
+            unix_error("Could not fork new process");
+        }
+        else if(processID == 0) {
+            int status = execve(arguments[0], arguments, 0);
+            exit(status);
         }
         else {
-            pid_t processID = fork();
-            if(processID < 0) {
-                unix_error("Could not fork new process");
-            }
-            else if(processID == 0) {
-                int status = execve(arguments[0], arguments, 0);
-                exit(status);
+            if(bg) {
+                addjob(jobs, processID, BG, cmdline);
             }
             else {
                 addjob(jobs, processID, FG, cmdline);
@@ -270,12 +270,9 @@ int builtin_cmd(char **argv)
             listjobs(jobs);
             return 1;
         }
-        else if(strcmp(argv[0], "fg") == 0) {
-            printf("Not Implemented: fg\n");
-            return 1;
-        }
-        else if(strcmp(argv[0], "bg") == 0) {
-            printf("Not Implemented: bg\n");
+        else if(strcmp(argv[0], "fg") == 0 ||
+                strcmp(argv[0], "bg") == 0) {
+            do_bgfg(argv);
             return 1;
         }
     }
@@ -287,6 +284,7 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
+    printf("Not Implemented: fg/bg\n");
     return;
 }
 
@@ -295,9 +293,8 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
-    int status;
-    if(waitpid(pid, &status, 0) < 0) {
-        unix_error("Could not wait for child");
+    while(fgpid(jobs) != 0) {
+        sleep(100);
     } 
     return;
 }
@@ -315,7 +312,12 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
-printf("SigChild has been called\n");
+    int pid = wait(NULL);
+    if(pid < 0) {
+        unix_error("Error reaping child");
+    }
+    deletejob(jobs, pid);
+    
     return;
 }
 
