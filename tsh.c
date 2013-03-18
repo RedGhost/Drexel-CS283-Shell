@@ -16,6 +16,7 @@
 #include <fcntl.h>
 
 /* Misc manifest constants */
+#define MAXPIPES     10   /* max pipe size */
 #define MAXLINE    1024   /* max line size */
 #define MAXARGS     128   /* max args on a command line */
 #define MAXJOBS      16   /* max jobs at any point in time */
@@ -67,7 +68,7 @@ void sigtstp_handler(int sig);
 void sigint_handler(int sig);
 
 /* Here are helper routines that we've provided for you */
-int parseline(const char *cmdline, char **argv, char **redirection); 
+int parseline(const char *cmdline, char ***pipes, char **redirection); 
 void sigquit_handler(int sig);
 
 void clearjob(struct job_t *job);
@@ -167,12 +168,43 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
-    char ** arguments = (char **) malloc(MAXARGS * sizeof(char *));
-    if(arguments == NULL) {
-        unix_error("Not Enough Memory");
+    char *** pipes = (char ***) malloc(MAXPIPES * sizeof(char **));
+    if(pipes == NULL) {
+        unix_error("Not enough memory");
     }
+
+    int i;
+    for(i = 0; i < MAXPIPES; i++) {
+        pipes[i] = (char **) malloc(MAXARGS * sizeof(char *));
+        if(pipes[i] == NULL) {
+            unix_error("Not enough memory");
+        }
+    }
+
     char ** redirection = (char **) malloc(2 * sizeof(char *));
-    int bg = parseline(cmdline, arguments, redirection);
+    if(redirection == NULL) {
+        unix_error("Not enough memory");
+    }
+    int bg = parseline(cmdline, pipes, redirection);
+
+    if(bg == 2) {
+        return;
+    }
+
+    for(i = 0; i < MAXPIPES; i++) {
+       char * arg = pipes[i][0];
+       if(arg == NULL) {
+           break;
+       }
+       int j = 0;
+       while(arg != NULL) {
+           j++;
+           printf("%s ", arg);
+           arg = pipes[i][j];
+       }
+       printf("\n");
+    }
+/*
 
     if(arguments[0] == NULL) {
         free(arguments);
@@ -244,7 +276,7 @@ void eval(char *cmdline)
     free(arguments);
     free(redirection);
 
-    return;
+    return;*/
 }
 
 /* 
@@ -254,7 +286,7 @@ void eval(char *cmdline)
  * argument.  Return true if the user has requested a BG job, false if
  * the user has requested a FG job.  
  */
-int parseline(const char *cmdline, char **argv, char **redirection) 
+int parseline(const char *cmdline, char ***pipes, char **redirection) 
 {
     static char array[MAXLINE]; /* holds local copy of command line */
     char *buf = array;          /* ptr that traverses command line */
@@ -283,9 +315,27 @@ int parseline(const char *cmdline, char **argv, char **redirection)
     int nextRedIn = 0;
     int nextRedOut = 0;
 
+    int numPipes = 0;
+    char ** argv = pipes[numPipes];
     while (delim) {
 	*delim = '\0';
-        if(buf[0] == '<') {
+        if(buf[0] == '|') {
+            if(argc != 0) {
+                if(argv[argc-1][0] == '&') {
+                    printf("Unexpected & symbol found before |\n");
+                    return 2;
+                }
+                argv[argc] = NULL;
+                if(numPipes+1 >= MAXPIPES) {
+                    printf("Unexpected number of pipes found. Maximum pipes allowed per line: %d\n", MAXPIPES);
+                    return 2;
+                }
+                numPipes++;
+                argv = pipes[numPipes];
+                argc = 0;
+            }
+        }
+        else if(buf[0] == '<') {
           if(buf[1] != '\0') {
               int buflen = strlen(buf);
               int i;
@@ -342,16 +392,17 @@ int parseline(const char *cmdline, char **argv, char **redirection)
 	    delim = strchr(buf, ' ');
 	}
     }
-    argv[argc] = NULL;
     
-    if (argc == 0)  /* ignore blank line */
-	return 1;
+    if (numPipes == 0)  /* ignore blank line */
+	return 2;
+    if (numPipes < MAXPIPES-1)
+        pipes[numPipes+1][0] = NULL;
 
     /* should the job run in the background? */
-    if ((bg = (*argv[argc-1] == '&')) != 0) {
-	argv[--argc] = NULL;
+    if ((bg = (*pipes[numPipes][argc-1] == '&')) != 0) {
+	pipes[numPipes][--argc] = NULL;
     }
-    return bg;
+    return (bg) ? 1 : 0;
 }
 
 /* 
