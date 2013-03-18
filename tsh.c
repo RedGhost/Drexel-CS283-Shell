@@ -11,7 +11,9 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <errno.h>
+#include <fcntl.h>
 
 /* Misc manifest constants */
 #define MAXLINE    1024   /* max line size */
@@ -65,7 +67,7 @@ void sigtstp_handler(int sig);
 void sigint_handler(int sig);
 
 /* Here are helper routines that we've provided for you */
-int parseline(const char *cmdline, char **argv); 
+int parseline(const char *cmdline, char **argv, char **redirection); 
 void sigquit_handler(int sig);
 
 void clearjob(struct job_t *job);
@@ -169,9 +171,12 @@ void eval(char *cmdline)
     if(arguments == NULL) {
         unix_error("Not Enough Memory");
     }
-    int bg = parseline(cmdline, arguments);
+    char ** redirection = (char **) malloc(2 * sizeof(char *));
+    int bg = parseline(cmdline, arguments, redirection);
 
     if(arguments[0] == NULL) {
+        free(arguments);
+        free(redirection);
         return;
     }
 
@@ -187,6 +192,28 @@ void eval(char *cmdline)
         else if(processID == 0) {
             sigprocmask(SIG_UNBLOCK, &set, NULL);
             setpgid(0, 0);
+
+            if(redirection[0] != NULL) {
+                int fd = open(redirection[0], O_RDONLY);
+                if(fd < 0) {
+                    unix_error("Could not redirect from file");
+                }
+                dup2(fd, STDIN_FILENO);
+                close(fd);
+            }
+            if(redirection[1] != NULL) {
+                struct stat status;
+                if(stat(".", &status) < 0) {
+                    unix_error("Could not redirect to file");
+                }
+                int fd = open(redirection[1], O_WRONLY | O_CREAT | O_TRUNC, status.st_mode & (S_IRUSR | S_IRGRP | S_IROTH | S_IWUSR | S_IWGRP | S_IWOTH));
+                if(fd < 0) {
+                    unix_error("Could not redirect to file");
+                }
+                dup2(fd, STDOUT_FILENO);
+                close(fd);
+            }
+
             int status = execve(arguments[0], arguments, 0);
             if(errno == ENOENT) {
                 printf("%s: Command not found\n", arguments[0]);
@@ -214,6 +241,9 @@ void eval(char *cmdline)
         }
     }
 
+    free(arguments);
+    free(redirection);
+
     return;
 }
 
@@ -224,7 +254,7 @@ void eval(char *cmdline)
  * argument.  Return true if the user has requested a BG job, false if
  * the user has requested a FG job.  
  */
-int parseline(const char *cmdline, char **argv) 
+int parseline(const char *cmdline, char **argv, char **redirection) 
 {
     static char array[MAXLINE]; /* holds local copy of command line */
     char *buf = array;          /* ptr that traverses command line */
@@ -247,9 +277,59 @@ int parseline(const char *cmdline, char **argv)
 	delim = strchr(buf, ' ');
     }
 
+    redirection[0] = NULL;
+    redirection[1] = NULL;
+
+    int nextRedIn = 0;
+    int nextRedOut = 0;
+
     while (delim) {
-	argv[argc++] = buf;
 	*delim = '\0';
+        if(buf[0] == '<') {
+          if(buf[1] != '\0') {
+              int buflen = strlen(buf);
+              int i;
+              redirection[0] = (buf+1);
+              for(i = 0; i < buflen; i++) {
+                  if(buf[i] == '>') {
+                      buf[i] = '\0';
+                      redirection[1] = (buf+i+1);
+                      break;
+                  }
+              }
+          }
+          else {
+              nextRedIn = 1;
+          }
+        }
+        else if(buf[0] == '>') {
+          if(buf[1] != '\0') {
+              int buflen = strlen(buf);
+              int i;
+              redirection[1] = (buf+1);
+              for(i = 0; i < buflen; i++) {
+                  if(buf[i] == '<') {
+                      buf[i] = '\0';
+                      redirection[0] = (buf+i+1);
+                      break;
+                  }
+              }
+          }
+          else {
+              nextRedOut = 1;
+          }
+        }
+        else if(nextRedIn) {
+            nextRedIn = 0;
+            redirection[0] = buf;
+        }
+        else if(nextRedOut) {
+            nextRedOut = 0;
+            redirection[1] = buf;
+        }
+        else {
+	    argv[argc++] = buf;
+        }
 	buf = delim + 1;
 	while (*buf && (*buf == ' ')) /* ignore spaces */
 	       buf++;
