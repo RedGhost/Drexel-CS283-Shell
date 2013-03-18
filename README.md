@@ -1,5 +1,7 @@
 Drexel-CS283-Shell
 ==================
+Mateusz Stankiewicz 11692859
+Ryan Christen 11587302
 
 Shell assignment for CS283: Systems Programming at Drexel University
 
@@ -24,4 +26,3 @@ myspin.c	# Takes argument <n> and spins for <n> seconds
 mysplit.c	# Forks a child that spins for <n> seconds
 mystop.c        # Spins for <n> seconds and sends SIGTSTP to itself
 myint.c         # Spins for <n> seconds and sends SIGINT to itself
-

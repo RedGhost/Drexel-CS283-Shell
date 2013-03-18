@@ -2,6 +2,7 @@
  * tsh - A tiny shell program with job control
  * 
  * Mateusz Stankiewicz 11692859
+ * Ryan Christen 11587302
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -167,32 +168,42 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
+    // Allocate enough space to hold the arguments
     char ** arguments = (char **) malloc(MAXARGS * sizeof(char *));
     if(arguments == NULL) {
         unix_error("Not Enough Memory");
     }
+
+    // Allocate enough space to hold for the redirection arguments
     char ** redirection = (char **) malloc(2 * sizeof(char *));
     int bg = parseline(cmdline, arguments, redirection);
 
+    // If there is no command to run just return
     if(arguments[0] == NULL) {
         free(arguments);
         free(redirection);
         return;
     }
 
+    // Identify and execute built-in commands
     if(!builtin_cmd(arguments)) {
+        // Stop the sigchld signals
         sigset_t set;
         sigemptyset(&set);
         sigaddset(&set, SIGCHLD);
         sigprocmask(SIG_BLOCK, &set, NULL);
+
+        // Create the child process
         pid_t processID = fork();
         if(processID < 0) {
             unix_error("Could not fork new process");
         }
         else if(processID == 0) {
+            // Child needs to unblock it's sigchld signals
             sigprocmask(SIG_UNBLOCK, &set, NULL);
             setpgid(0, 0);
 
+            // Redirects STDIN to a file
             if(redirection[0] != NULL) {
                 int fd = open(redirection[0], O_RDONLY);
                 if(fd < 0) {
@@ -201,6 +212,8 @@ void eval(char *cmdline)
                 dup2(fd, STDIN_FILENO);
                 close(fd);
             }
+
+            // Redirects STDOUT to a file
             if(redirection[1] != NULL) {
                 struct stat status;
                 if(stat(".", &status) < 0) {
@@ -214,6 +227,7 @@ void eval(char *cmdline)
                 close(fd);
             }
 
+            // Executes the program
             int status = execve(arguments[0], arguments, 0);
             if(errno == ENOENT) {
                 printf("%s: Command not found\n", arguments[0]);
@@ -227,12 +241,14 @@ void eval(char *cmdline)
             exit(status);
         }
         else {
+            // If the job is background don't block the shell
             if(bg) {
                 addjob(jobs, processID, BG, cmdline);
                 struct job_t * job = getjobpid(jobs, processID);
                 printf("[%d] (%d) %s", job->jid, processID, job->cmdline);
                 sigprocmask(SIG_UNBLOCK, &set, NULL);
             }
+            // Foreground jobs need to block the shell
             else {
                 addjob(jobs, processID, FG, cmdline);
                 sigprocmask(SIG_UNBLOCK, &set, NULL);
@@ -241,6 +257,7 @@ void eval(char *cmdline)
         }
     }
 
+    // Free memory
     free(arguments);
     free(redirection);
 
@@ -277,6 +294,7 @@ int parseline(const char *cmdline, char **argv, char **redirection)
 	delim = strchr(buf, ' ');
     }
 
+    // Initialize redirections to NULL
     redirection[0] = NULL;
     redirection[1] = NULL;
 
@@ -285,6 +303,7 @@ int parseline(const char *cmdline, char **argv, char **redirection)
 
     while (delim) {
 	*delim = '\0';
+        // Read the STDIN redirection
         if(buf[0] == '<') {
           if(buf[1] != '\0') {
               int buflen = strlen(buf);
@@ -302,6 +321,7 @@ int parseline(const char *cmdline, char **argv, char **redirection)
               nextRedIn = 1;
           }
         }
+        // Read the STDOUT redirection
         else if(buf[0] == '>') {
           if(buf[1] != '\0') {
               int buflen = strlen(buf);
@@ -360,6 +380,7 @@ int parseline(const char *cmdline, char **argv, char **redirection)
  */
 int builtin_cmd(char **argv) 
 {
+    // Perform builtin commands
     if(argv != NULL && argv[0] != NULL) {
         if(strcmp(argv[0], "quit") == 0) {
             exit(EXIT_SUCCESS);
@@ -383,17 +404,21 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
+    // Validate inputs
     if(argv == NULL || argv[0] == NULL) {
         return;
     }
 
+    // Is it BG?
     int bg = strcmp(argv[0], "bg") == 0;
 
+    // No JOB ID OR PID
     if(argv[1] == NULL) {
         printf("%s command requires PID or %%jobid argument\n", ((bg) ? "bg" : "fg"));
         return;
     }
 
+    // Parse the Job ID or PID
     char * idStr;
     int pid = 1;
     if(*(argv[1]) == '%') {
@@ -416,6 +441,7 @@ void do_bgfg(char **argv)
         weight *= 10;
     }
 
+    // Fetch the job that this command corresponds to
     struct job_t * job = ((pid) ? getjobpid(jobs, id) : getjobjid(jobs, id));
     if(job == NULL) {
         if(pid) {
@@ -427,15 +453,18 @@ void do_bgfg(char **argv)
         return;
     }
 
+    // Don't know what to do with undefined jobs
     if(job->state == UNDEF) {
         return;
     }
 
+    // Place job in foreground and block on it
     if(strcmp(argv[0], "fg") == 0) {
         job->state = FG;
         kill(-(job->pid), SIGCONT);
         waitfg(job->pid);
     }
+    // Place job as running and continue
     else if(strcmp(argv[0], "bg") == 0) {
         job->state = BG;
         kill(-(job->pid), SIGCONT);
@@ -450,6 +479,7 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+    // Busy Loop
     while(fgpid(jobs) == pid) {
         sleep(100);
     } 
@@ -469,24 +499,32 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
+    // Since we are called someone terminated or stopped and we have to try to reap them
     int status;
     int pid = waitpid(-1, &status, WNOHANG | WUNTRACED);
     if(pid < 0) {
         unix_error("Error reaping child");
     }
     
+    // This is not a fluke
     if(pid > 0) {
+        // Fetch the relevant job
         struct job_t * job = getjobpid(jobs, pid);
+
+        // The process was stopped but could be restarted
         if(WIFSTOPPED(status)) {
             job->state = ST;
             printf("Job [%d] (%d) stopped by signal %d\n", job->jid, pid, SIGTSTP);
         }
+        // The process terminated
         else {
             job->state = UNDEF;
+            // Was the process killed by a signal?
             if(WIFSIGNALED(status)) {
                 printf("Job [%d] (%d) terminated by signal %d\n", job->jid, pid, WTERMSIG(status));
                 deletejob(jobs, pid);
             }
+            // Did the process exit naturally?
             else if(WIFEXITED(status)) {
                 deletejob(jobs, pid);
             }
