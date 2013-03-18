@@ -165,10 +165,6 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGCHLD);
-    sigprocmask(SIG_BLOCK, &set, NULL);
     char ** arguments = (char **) malloc(MAXARGS * sizeof(char *));
     if(arguments == NULL) {
         unix_error("Not Enough Memory");
@@ -180,6 +176,10 @@ void eval(char *cmdline)
     }
 
     if(!builtin_cmd(arguments)) {
+        sigset_t set;
+        sigemptyset(&set);
+        sigaddset(&set, SIGCHLD);
+        sigprocmask(SIG_BLOCK, &set, NULL);
         pid_t processID = fork();
         if(processID < 0) {
             unix_error("Could not fork new process");
@@ -189,13 +189,13 @@ void eval(char *cmdline)
             setpgid(0, 0);
             int status = execve(arguments[0], arguments, 0);
             if(errno == ENOENT) {
-                printf("%s: Command not found.\n", arguments[0]);
+                printf("%s: Command not found\n", arguments[0]);
             }
             else if(errno == EACCES) {
-                printf("%s: Command not executable.\n", arguments[0]);
+                printf("%s: Command not executable\n", arguments[0]);
             }
             else if(errno != 0) {
-                printf("%s: Unknown error.\n", arguments[0]);
+                printf("%s: Unknown error\n", arguments[0]);
             }
             exit(status);
         }
@@ -303,49 +303,63 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
-
-printf("HASDFDSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\n");
-    printf("%s %s\n", argv[0], argv[1]);
     if(argv == NULL || argv[0] == NULL) {
         return;
     }
 
+    int bg = strcmp(argv[0], "bg") == 0;
+
     if(argv[1] == NULL) {
-        printf("You must specify a job ID or process ID.\n");
+        printf("%s command requires PID or %%jobid argument\n", ((bg) ? "bg" : "fg"));
         return;
     }
 
-    printf("%s %s\n", argv[0], argv[1]);
-
-    int id = 0;
+    char * idStr;
     int pid = 1;
     if(*(argv[1]) == '%') {
         pid = 0;
-        id = atoi(argv[1]+1);
+        idStr = argv[1]+1;
     }
     else {
-        id = atoi(argv[1]);
+        idStr = argv[1];
+    }
+
+    int id = 0;
+    int weight = 1;
+    int i;
+    for(i = strlen(idStr)-1; i >= 0; i--) {
+        if(idStr[i] < '0' || idStr[i] > '9') {
+            printf("%s: argument must be a PID or %%jobid\n", ((bg) ? "bg" : "fg"));
+            return;
+        }
+        id += weight * (idStr[i] - '0');
+        weight *= 10;
     }
 
     struct job_t * job = ((pid) ? getjobpid(jobs, id) : getjobjid(jobs, id));
     if(job == NULL) {
+        if(pid) {
+            printf("(%d): No such process\n", id);
+        }
+        else {
+            printf("%%%d: No such job\n", id);
+        }
         return;
     }
-    printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
 
     if(job->state == UNDEF) {
         return;
     }
 
-
     if(strcmp(argv[0], "fg") == 0) {
         job->state = FG;
-        kill(-job->pid, SIGCONT);
+        kill(-(job->pid), SIGCONT);
         waitfg(job->pid);
     }
     else if(strcmp(argv[0], "bg") == 0) {
         job->state = BG;
-        kill(-job->pid, SIGCONT);
+        kill(-(job->pid), SIGCONT);
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
     }
 
     return;
@@ -381,19 +395,21 @@ void sigchld_handler(int sig)
         unix_error("Error reaping child");
     }
     
-    struct job_t * job = getjobpid(jobs, pid);
-    if(WIFSTOPPED(status)) {
-        job->state = ST;
-        printf("Job [%d] (%d) stopped by signal %d\n", job->jid, pid, SIGTSTP);
-    }
-    else {
-        job->state = UNDEF;
-        if(WIFSIGNALED(status)) {
-            deletejob(jobs, pid);
-            printf("Job [%d] (%d) terminated by signal %d\n", job->jid, pid, WTERMSIG(status));
+    if(pid > 0) {
+        struct job_t * job = getjobpid(jobs, pid);
+        if(WIFSTOPPED(status)) {
+            job->state = ST;
+            printf("Job [%d] (%d) stopped by signal %d\n", job->jid, pid, SIGTSTP);
         }
-        else if(WIFEXITED(status)) {
-            deletejob(jobs, pid);
+        else {
+            job->state = UNDEF;
+            if(WIFSIGNALED(status)) {
+                printf("Job [%d] (%d) terminated by signal %d\n", job->jid, pid, WTERMSIG(status));
+                deletejob(jobs, pid);
+            }
+            else if(WIFEXITED(status)) {
+                deletejob(jobs, pid);
+            }
         }
     }
     
